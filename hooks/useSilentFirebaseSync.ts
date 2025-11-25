@@ -6,10 +6,10 @@ import { db } from '../firebaseConfig';
  * Hook silencioso que sincroniza propostas com Firebase
  * Não mexe em nada da UI - apenas salva em background
  */
-export const useSilentFirebaseSync = (savedProposals: any[]) => {
+export const useSilentFirebaseSync = (savedProposals: any[], updateSavedProposalMetaData?: (id: string, updates: Partial<any>) => void) => {
   // Auto-salvar propostas quando mudarem
   useEffect(() => {
-    if (!db || !savedProposals.length) return;
+    if (!db || !savedProposals || savedProposals.length === 0) return;
 
     const syncProposals = async () => {
       try {
@@ -28,14 +28,38 @@ export const useSilentFirebaseSync = (savedProposals: any[]) => {
           };
 
           try {
-            if (proposal.firebaseId) {
-              // Atualizar
-              await updateDoc(doc(db, 'proposals', proposal.firebaseId), proposalData);
+            const proposalData = {
+              ...proposal,
+              deviceId,
+              syncedAt: new Date().toISOString(),
+            };
+
+            // Verifica se já existe `firebaseId` no objeto ou em localStorage
+            let firebaseId = proposal.firebaseId || localStorage.getItem(`proposal_${proposal.id}_firebase`);
+
+            if (firebaseId) {
+              // Atualiza documento existente
+              await updateDoc(doc(db, 'proposals', firebaseId), proposalData);
+
+              // Se o objeto local não tinha firebaseId, atualiza o state via callback
+              if (!proposal.firebaseId && updateSavedProposalMetaData) {
+                try {
+                  updateSavedProposalMetaData(proposal.id, { firebaseId });
+                } catch (e) {
+                  console.warn('Falha ao atualizar meta local da proposta', e);
+                }
+              }
             } else {
-              // Criar novo
+              // Cria novo documento
               const docRef = await addDoc(collection(db, 'proposals'), proposalData);
-              // Atualiza localStorage com o ID do Firebase
-              localStorage.setItem(`proposal_${proposal.id}_firebase`, docRef.id);
+              firebaseId = docRef.id;
+
+              try {
+                localStorage.setItem(`proposal_${proposal.id}_firebase`, firebaseId);
+                if (updateSavedProposalMetaData) updateSavedProposalMetaData(proposal.id, { firebaseId });
+              } catch (e) {
+                console.warn('Falha ao gravar firebaseId localmente', e);
+              }
             }
           } catch (err) {
             console.log('Sincronização em background...');

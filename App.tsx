@@ -37,7 +37,7 @@ function App() {
   const [resetKey, setResetKey] = useState(0); // Key to force reset of child components
 
   // Sincronizar propostas com Firebase em background (silencioso)
-  useSilentFirebaseSync(store.savedProposals);
+  useSilentFirebaseSync(store.savedProposals, store.updateSavedProposalMetaData);
 
   const menuItems = [
     { id: 'overview', label: 'Página Inicial', icon: <HomeIcon className="w-5 h-5" /> },
