@@ -786,13 +786,39 @@ export const useBudgetStore = () => {
       showNotification('Proposta salva com sucesso!');
   };
 
-  // Update proposal metadata without full load
-  const updateSavedProposalMetaData = (id: string, updates: Partial<SavedProposal>) => {
-      setSavedProposals(prev => prev.map(p => 
-          p.id === id ? { ...p, ...updates } : p
-      ));
-      showNotification('Proposta atualizada com sucesso!');
-  };
+    // Update proposal metadata without full load. If proposal doesn't exist, add it.
+    const updateSavedProposalMetaData = (id: string, updates: Partial<SavedProposal>) => {
+      setSavedProposals(prev => {
+        const found = prev.find(p => p.id === id || (updates && (updates as any).firebaseId && p.firebaseId === (updates as any).firebaseId));
+        if (found) {
+          // Update existing
+          return prev.map(p => p.id === id ? { ...p, ...updates } : p);
+        }
+
+        // Add as new proposal (imported from remote). Fill minimal fields if missing.
+        const newProposal: SavedProposal = {
+          id: id,
+          number: updates?.number || `0000-${new Date().getFullYear()}`,
+          createdAt: updates?.createdAt || new Date().toISOString(),
+          clientName: updates?.clientName || 'Cliente (importado)',
+          projectName: updates?.projectName || 'Projeto (importado)',
+          clientPhone: updates?.clientPhone,
+          serviceDescription: updates?.serviceDescription,
+          validityDays: updates?.validityDays,
+          warrantyTime: updates?.warrantyTime,
+          deliveryTime: updates?.deliveryTime,
+          paymentCondition: updates?.paymentCondition,
+          images: updates?.images,
+          finalValue: updates?.finalValue || 0,
+          status: updates?.status || 'Aguardando aprovação',
+          data: updates?.data || { pieces: [], projectComponents: [], fixedComponents: [], additionalServices: [], proposalProducts: [], settings },
+          firebaseId: (updates as any)?.firebaseId
+        };
+
+        showNotification('Proposta importada do servidor.');
+        return [newProposal, ...prev];
+      });
+    };
 
   const deleteProposal = (id: string) => {
       setSavedProposals(prev => prev.filter(p => p.id !== id));

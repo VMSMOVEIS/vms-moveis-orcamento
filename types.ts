@@ -187,6 +187,8 @@ export interface SavedProposal {
     cardRates: CardRate[];    // Snapshot of rates at time of saving
     stats: ProjectStats;      // Snapshot of calculations at time of saving
   };
+  // Optional Firebase document id for cloud sync
+  firebaseId?: string;
 }
 
 // Interface to pass loaded data back to Pricing component form

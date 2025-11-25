@@ -7,6 +7,42 @@ import { db } from '../firebaseConfig';
  * Não mexe em nada da UI - apenas salva em background
  */
 export const useSilentFirebaseSync = (savedProposals: any[], updateSavedProposalMetaData?: (id: string, updates: Partial<any>) => void) => {
+  // On mount: carregar propostas do Firestore e mesclar com local
+  useEffect(() => {
+    if (!db || !updateSavedProposalMetaData) return;
+
+    const loadRemoteProposals = async () => {
+      try {
+        const snaps = await getDocs(collection(db, 'proposals'));
+        for (const docSnap of snaps.docs) {
+          const remote = docSnap.data() as any;
+          const firebaseId = docSnap.id;
+          const remoteId = remote.id || `remote_${firebaseId}`;
+
+          // Se já existe mapeamento local, atualiza apenas o firebaseId se necessário
+          const existingFirebaseKey = localStorage.getItem(`proposal_${remoteId}_firebase`);
+          if (existingFirebaseKey === firebaseId) {
+            // já está associado
+            continue;
+          }
+
+          // Chama callback para mesclar/guardar no store
+          try {
+            updateSavedProposalMetaData(remoteId, { ...remote, firebaseId });
+            // Marca mapeamento local para não duplicar
+            localStorage.setItem(`proposal_${remoteId}_firebase`, firebaseId);
+          } catch (e) {
+            console.warn('Falha ao importar proposta remota', e);
+          }
+        }
+      } catch (e) {
+        console.debug('Falha ao carregar propostas remotas', e);
+      }
+    };
+
+    loadRemoteProposals();
+  }, [updateSavedProposalMetaData]);
+
   // Auto-salvar propostas quando mudarem
   useEffect(() => {
     if (!db || !savedProposals || savedProposals.length === 0) return;
