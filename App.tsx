@@ -1,6 +1,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useBudgetStore } from './hooks/useBudgetStore';
+import { useSilentFirebaseSync } from './hooks/useSilentFirebaseSync';
 import { Overview } from './components/views/Overview';
 import { Pieces } from './components/views/Pieces';
 import { Materials } from './components/views/Materials';
@@ -34,6 +35,9 @@ function App() {
   const [currentView, setCurrentView] = useState<'overview' | 'pieces' | 'materials' | 'pricing' | 'database' | 'settings' | 'proposals'>('overview');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [resetKey, setResetKey] = useState(0); // Key to force reset of child components
+
+  // Sincronizar propostas com Firebase em background (silencioso)
+  useSilentFirebaseSync(store.savedProposals);
 
   const menuItems = [
     { id: 'overview', label: 'Página Inicial', icon: <HomeIcon className="w-5 h-5" /> },
