@@ -1,38 +1,65 @@
 import { useEffect } from 'react';
-import { collection, addDoc, updateDoc, deleteDoc, doc, getDocs, query, where } from 'firebase/firestore';
+import { collection, addDoc, updateDoc, doc, getDocs } from 'firebase/firestore';
 import { db } from '../firebaseConfig';
+
+// Use Airtable serverless endpoints when VITE_USE_AIRTABLE=true
+const useAirtable = (import.meta as any).env?.VITE_USE_AIRTABLE === 'true';
+const AIRTABLE_SAVE_ENDPOINT = '/api/airtable-save';
+const AIRTABLE_LOAD_ENDPOINT = '/api/airtable-load';
 
 /**
  * Hook silencioso que sincroniza propostas com Firebase
  * Não mexe em nada da UI - apenas salva em background
  */
 export const useSilentFirebaseSync = (savedProposals: any[], updateSavedProposalMetaData?: (id: string, updates: Partial<any>) => void) => {
-  // On mount: carregar propostas do Firestore e mesclar com local
+  // On mount: carregar propostas remotas (Firestore OR Airtable) e mesclar com local
   useEffect(() => {
-    if (!db || !updateSavedProposalMetaData) return;
+    if (!updateSavedProposalMetaData) return;
 
     const loadRemoteProposals = async () => {
       try {
-        const snaps = await getDocs(collection(db, 'proposals'));
-        for (const docSnap of snaps.docs) {
-          const remote = docSnap.data() as any;
-          const firebaseId = docSnap.id;
-          const remoteId = remote.id || `remote_${firebaseId}`;
-
-          // Se já existe mapeamento local, atualiza apenas o firebaseId se necessário
-          const existingFirebaseKey = localStorage.getItem(`proposal_${remoteId}_firebase`);
-          if (existingFirebaseKey === firebaseId) {
-            // já está associado
-            continue;
-          }
-
-          // Chama callback para mesclar/guardar no store
+        if (useAirtable) {
+          // Call serverless endpoint to fetch Airtable records
           try {
-            updateSavedProposalMetaData(remoteId, { ...remote, firebaseId });
-            // Marca mapeamento local para não duplicar
-            localStorage.setItem(`proposal_${remoteId}_firebase`, firebaseId);
+            const resp = await fetch(AIRTABLE_LOAD_ENDPOINT);
+            if (!resp.ok) throw new Error('Airtable load failed');
+            const json = await resp.json();
+            for (const r of json.records || []) {
+              const remote = r.payload || {};
+              const recordId = r.recordId;
+              const remoteId = remote.id || `remote_${recordId}`;
+
+              const existingKey = localStorage.getItem(`proposal_${remoteId}_firebase`);
+              if (existingKey === recordId) continue;
+
+              try {
+                updateSavedProposalMetaData(remoteId, { ...remote, firebaseId: recordId });
+                localStorage.setItem(`proposal_${remoteId}_firebase`, recordId);
+              } catch (e) {
+                console.warn('Falha ao importar proposta remota (airtable)', e);
+              }
+            }
           } catch (e) {
-            console.warn('Falha ao importar proposta remota', e);
+            console.debug('Falha ao carregar propostas remotas (airtable)', e);
+          }
+        } else {
+          // Firestore
+          if (!db) return;
+          const snaps = await getDocs(collection(db, 'proposals'));
+          for (const docSnap of snaps.docs) {
+            const remote = docSnap.data() as any;
+            const firebaseId = docSnap.id;
+            const remoteId = remote.id || `remote_${firebaseId}`;
+
+            const existingFirebaseKey = localStorage.getItem(`proposal_${remoteId}_firebase`);
+            if (existingFirebaseKey === firebaseId) continue;
+
+            try {
+              updateSavedProposalMetaData(remoteId, { ...remote, firebaseId });
+              localStorage.setItem(`proposal_${remoteId}_firebase`, firebaseId);
+            } catch (e) {
+              console.warn('Falha ao importar proposta remota', e);
+            }
           }
         }
       } catch (e) {
@@ -63,43 +90,51 @@ export const useSilentFirebaseSync = (savedProposals: any[], updateSavedProposal
             syncedAt: new Date().toISOString(),
           };
 
-          try {
-            const proposalData = {
-              ...proposal,
-              deviceId,
-              syncedAt: new Date().toISOString(),
-            };
+            try {
+              const proposalData = {
+                ...proposal,
+                deviceId,
+                syncedAt: new Date().toISOString(),
+              };
 
-            // Verifica se já existe `firebaseId` no objeto ou em localStorage
-            let firebaseId = proposal.firebaseId || localStorage.getItem(`proposal_${proposal.id}_firebase`);
-
-            if (firebaseId) {
-              // Atualiza documento existente
-              await updateDoc(doc(db, 'proposals', firebaseId), proposalData);
-
-              // Se o objeto local não tinha firebaseId, atualiza o state via callback
-              if (!proposal.firebaseId && updateSavedProposalMetaData) {
+              if (useAirtable) {
+                // Send to serverless Airtable endpoint
                 try {
-                  updateSavedProposalMetaData(proposal.id, { firebaseId });
+                  const resp = await fetch(AIRTABLE_SAVE_ENDPOINT, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(proposalData)
+                  });
+                  if (!resp.ok) throw new Error('airtable save failed');
+                  const json = await resp.json();
+                  const recordId = json.id || (json.record && json.record.id);
+                  if (recordId) {
+                    try {
+                      localStorage.setItem(`proposal_${proposal.id}_firebase`, recordId);
+                      if (updateSavedProposalMetaData) updateSavedProposalMetaData(proposal.id, { firebaseId: recordId });
+                    } catch (e) { console.warn('Falha ao gravar id airtable localmente', e); }
+                  }
                 } catch (e) {
-                  console.warn('Falha ao atualizar meta local da proposta', e);
+                  console.debug('Falha ao sincronizar com Airtable', e);
+                }
+              } else {
+                // Firestore path
+                let firebaseId = proposal.firebaseId || localStorage.getItem(`proposal_${proposal.id}_firebase`);
+
+                if (firebaseId) {
+                  await updateDoc(doc(db, 'proposals', firebaseId), proposalData);
+                  if (!proposal.firebaseId && updateSavedProposalMetaData) {
+                    try { updateSavedProposalMetaData(proposal.id, { firebaseId }); } catch (e) { console.warn('Falha ao atualizar meta local da proposta', e); }
+                  }
+                } else {
+                  const docRef = await addDoc(collection(db, 'proposals'), proposalData);
+                  firebaseId = docRef.id;
+                  try { localStorage.setItem(`proposal_${proposal.id}_firebase`, firebaseId); if (updateSavedProposalMetaData) updateSavedProposalMetaData(proposal.id, { firebaseId }); } catch (e) { console.warn('Falha ao gravar firebaseId localmente', e); }
                 }
               }
-            } else {
-              // Cria novo documento
-              const docRef = await addDoc(collection(db, 'proposals'), proposalData);
-              firebaseId = docRef.id;
-
-              try {
-                localStorage.setItem(`proposal_${proposal.id}_firebase`, firebaseId);
-                if (updateSavedProposalMetaData) updateSavedProposalMetaData(proposal.id, { firebaseId });
-              } catch (e) {
-                console.warn('Falha ao gravar firebaseId localmente', e);
-              }
+            } catch (err) {
+              console.log('Sincronização em background...');
             }
-          } catch (err) {
-            console.log('Sincronização em background...');
-          }
         }
       } catch (error) {
         console.log('Firebase sync em background');
